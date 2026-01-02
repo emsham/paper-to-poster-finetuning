@@ -158,6 +158,17 @@ def main():
         default="training_data.jsonl",
         help="Export output path"
     )
+    parser.add_argument(
+        "--export-tracking",
+        type=str,
+        default=None,
+        help="Export tracking data merged with source CSV to this path"
+    )
+    parser.add_argument(
+        "--show-tracking",
+        action="store_true",
+        help="Show tracking summary after processing"
+    )
 
     # Parallel processing options
     parser.add_argument(
@@ -298,6 +309,40 @@ def main():
             )
 
             print(f"\nCompleted! Stats: {stats}")
+
+            # Export tracking data if requested
+            if args.export_tracking:
+                df_full = pd.read_csv(csv_path)  # Reload full dataset
+                parallel_pipeline.export_tracking(
+                    df_full,
+                    output_path=args.export_tracking,
+                    format="parquet" if args.export_tracking.endswith(".parquet") else "csv"
+                )
+
+            # Show tracking summary if requested
+            if args.show_tracking:
+                summary = parallel_pipeline.get_tracking_summary()
+                print("\n" + "="*70)
+                print("TRACKING SUMMARY")
+                print("="*70)
+                for key, value in summary.items():
+                    if isinstance(value, float):
+                        print(f"  {key}: {value:.2f}")
+                    else:
+                        print(f"  {key}: {value}")
+
+                # Show pending and failed
+                pending = parallel_pipeline.get_pending_items()
+                failed = parallel_pipeline.get_failed_items()
+                if pending:
+                    print(f"\n  Pending items: {len(pending)}")
+                if failed:
+                    print(f"  Failed items: {len(failed)}")
+                    for paper_id in failed[:5]:  # Show first 5
+                        print(f"    - {paper_id}")
+                    if len(failed) > 5:
+                        print(f"    ... and {len(failed) - 5} more")
+                print("="*70)
 
         else:
             # Standard sequential processing

@@ -48,6 +48,7 @@ from .models import (
     PipelineResult,
     ExtractedFigure
 )
+from .tracking import ProcessingTracker, create_tracker
 
 
 @dataclass
@@ -106,6 +107,7 @@ class StagedPipeline:
         self.config.setup_directories()
         self.checkpoint_path = self.config.output_dir / "checkpoint.json"
         self.checkpoint = CheckpointState.load(self.checkpoint_path)
+        self.tracker = create_tracker(self.config.output_dir)
 
     def run(
         self,
@@ -134,6 +136,9 @@ class StagedPipeline:
         ].copy()
 
         paper_ids = valid_df['paper_id'].astype(str).tolist()
+
+        # Initialize tracker with all items
+        self.tracker.initialize_from_dataframe(valid_df)
 
         print(f"\n{'='*70}")
         print(f"STAGED PIPELINE - {len(paper_ids)} items")
@@ -176,11 +181,21 @@ class StagedPipeline:
             stage_stats = stage_func(valid_df, num_workers, batch_size)
             stats["stages"][stage_name] = stage_stats
 
-            # Save checkpoint
+            # Save checkpoint and tracking data
             self.checkpoint.save(self.checkpoint_path)
+            self.tracker.save()
 
             # Free GPU memory between stages
             self._free_gpu_memory()
+
+        # Print tracking summary
+        summary = self.tracker.get_summary()
+        print(f"\n{'='*70}")
+        print("PROCESSING SUMMARY")
+        print(f"{'='*70}")
+        for key, value in summary.items():
+            print(f"  {key}: {value}")
+        print(f"{'='*70}\n")
 
         return stats
 
@@ -210,15 +225,27 @@ class StagedPipeline:
 
             # Check if already done
             output_dir = self.config.output_dir / self.config.poster_parsed_dir / paper_id
-            if (output_dir / "markdown" / f"{paper_id}.md").exists():
+            md_path = output_dir / "markdown" / f"{paper_id}.md"
+            figures_dir = output_dir / "markdown" / "figures"
+
+            if md_path.exists():
                 stats["skipped"] += 1
                 self.checkpoint.completed_ids.add(f"poster_{paper_id}")
+                # Update tracker with existing data
+                figure_count = len(list(figures_dir.glob("*.png"))) if figures_dir.exists() else 0
+                self.tracker.update_stage(
+                    paper_id, "poster_parsed", success=True,
+                    poster_markdown_path=str(md_path.relative_to(self.config.output_dir)),
+                    poster_figures_dir=str(figures_dir.relative_to(self.config.output_dir)) if figures_dir.exists() else None,
+                    poster_figure_count=figure_count
+                )
                 continue
 
             try:
                 poster_path = self.config.data_dir / row['local_image_path']
                 if not poster_path.exists():
                     stats["failed"] += 1
+                    self.tracker.update_stage(paper_id, "poster_parsed", success=False, error="Poster file not found")
                     continue
 
                 parser.parse_poster(
@@ -226,6 +253,18 @@ class StagedPipeline:
                     str(output_dir),
                     paper_id
                 )
+
+                # Count extracted figures
+                figure_count = len(list(figures_dir.glob("*.png"))) if figures_dir.exists() else 0
+
+                # Update tracker
+                self.tracker.update_stage(
+                    paper_id, "poster_parsed", success=True,
+                    poster_markdown_path=str(md_path.relative_to(self.config.output_dir)),
+                    poster_figures_dir=str(figures_dir.relative_to(self.config.output_dir)) if figures_dir.exists() else None,
+                    poster_figure_count=figure_count
+                )
+
                 stats["processed"] += 1
                 self.checkpoint.completed_ids.add(f"poster_{paper_id}")
 
@@ -233,6 +272,7 @@ class StagedPipeline:
                 print(f"Error parsing poster {paper_id}: {e}")
                 stats["failed"] += 1
                 self.checkpoint.failed_ids.add(f"poster_{paper_id}")
+                self.tracker.update_stage(paper_id, "poster_parsed", success=False, error=str(e))
 
         # Unload model
         del parser
@@ -259,15 +299,27 @@ class StagedPipeline:
 
             # Check if already done
             output_dir = self.config.output_dir / self.config.paper_parsed_dir / paper_id
-            if (output_dir / "markdown" / f"{paper_id}.md").exists():
+            md_path = output_dir / "markdown" / f"{paper_id}.md"
+            figures_dir = output_dir / "markdown" / "figures"
+
+            if md_path.exists():
                 stats["skipped"] += 1
                 self.checkpoint.completed_ids.add(f"paper_{paper_id}")
+                # Update tracker with existing data
+                figure_count = len(list(figures_dir.glob("*.png"))) if figures_dir.exists() else 0
+                self.tracker.update_stage(
+                    paper_id, "paper_parsed", success=True,
+                    paper_markdown_path=str(md_path.relative_to(self.config.output_dir)),
+                    paper_figures_dir=str(figures_dir.relative_to(self.config.output_dir)) if figures_dir.exists() else None,
+                    paper_figure_count=figure_count
+                )
                 continue
 
             try:
                 paper_path = self.config.data_dir / row['local_pdf_path']
                 if not paper_path.exists():
                     stats["failed"] += 1
+                    self.tracker.update_stage(paper_id, "paper_parsed", success=False, error="Paper file not found")
                     continue
 
                 parser.parse_paper(
@@ -275,6 +327,18 @@ class StagedPipeline:
                     str(output_dir),
                     paper_id
                 )
+
+                # Count extracted figures
+                figure_count = len(list(figures_dir.glob("*.png"))) if figures_dir.exists() else 0
+
+                # Update tracker
+                self.tracker.update_stage(
+                    paper_id, "paper_parsed", success=True,
+                    paper_markdown_path=str(md_path.relative_to(self.config.output_dir)),
+                    paper_figures_dir=str(figures_dir.relative_to(self.config.output_dir)) if figures_dir.exists() else None,
+                    paper_figure_count=figure_count
+                )
+
                 stats["processed"] += 1
                 self.checkpoint.completed_ids.add(f"paper_{paper_id}")
 
@@ -282,6 +346,7 @@ class StagedPipeline:
                 print(f"Error parsing paper {paper_id}: {e}")
                 stats["failed"] += 1
                 self.checkpoint.failed_ids.add(f"paper_{paper_id}")
+                self.tracker.update_stage(paper_id, "paper_parsed", success=False, error=str(e))
 
         del parser
         self._free_gpu_memory()
@@ -306,8 +371,19 @@ class StagedPipeline:
 
             # Check if already done
             match_dir = self.config.output_dir / self.config.figure_matches_dir / paper_id
-            if (match_dir / "report.json").exists():
+            report_path = match_dir / "report.json"
+
+            if report_path.exists():
                 stats["skipped"] += 1
+                # Update tracker with existing data
+                with open(report_path, 'r') as f:
+                    report_data = json.load(f)
+                match_count = len(report_data.get("matches", []))
+                self.tracker.update_stage(
+                    paper_id, "figures_matched", success=True,
+                    figure_matches_path=str(report_path.relative_to(self.config.output_dir)),
+                    matched_figure_count=match_count
+                )
                 continue
 
             try:
@@ -325,8 +401,13 @@ class StagedPipeline:
                     stats["no_figures"] += 1
                     # Create empty report
                     match_dir.mkdir(parents=True, exist_ok=True)
-                    with open(match_dir / "report.json", 'w') as f:
+                    with open(report_path, 'w') as f:
                         json.dump({"matches": [], "reason": "no_figures"}, f)
+                    self.tracker.update_stage(
+                        paper_id, "figures_matched", success=True,
+                        figure_matches_path=str(report_path.relative_to(self.config.output_dir)),
+                        matched_figure_count=0
+                    )
                     continue
 
                 matcher.match_figures(
@@ -334,11 +415,28 @@ class StagedPipeline:
                     paper_figures,
                     str(match_dir)
                 )
+
+                # Read match count from generated report
+                if report_path.exists():
+                    with open(report_path, 'r') as f:
+                        report_data = json.load(f)
+                    match_count = len(report_data.get("matches", []))
+                else:
+                    match_count = 0
+
+                # Update tracker
+                self.tracker.update_stage(
+                    paper_id, "figures_matched", success=True,
+                    figure_matches_path=str(report_path.relative_to(self.config.output_dir)),
+                    matched_figure_count=match_count
+                )
+
                 stats["processed"] += 1
 
             except Exception as e:
                 print(f"Error matching figures for {paper_id}: {e}")
                 stats["failed"] += 1
+                self.tracker.update_stage(paper_id, "figures_matched", success=False, error=str(e))
 
         del matcher
         self._free_gpu_memory()
@@ -362,28 +460,51 @@ class StagedPipeline:
 
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Describing posters"):
             paper_id = str(row['paper_id'])
+            layout_path = desc_dir / f"{paper_id}_layout.json"
 
             # Check if already done
-            if (desc_dir / f"{paper_id}_layout.json").exists():
+            if layout_path.exists():
                 stats["skipped"] += 1
+                # Update tracker with existing data
+                with open(layout_path, 'r') as f:
+                    layout_data = json.load(f)
+                section_count = len(layout_data.get("sections", []))
+                self.tracker.update_stage(
+                    paper_id, "layout_extracted", success=True,
+                    layout_json_path=str(layout_path.relative_to(self.config.output_dir)),
+                    section_count=section_count
+                )
                 continue
 
             try:
                 poster_path = self.config.data_dir / row['local_image_path']
                 if not poster_path.exists():
                     stats["failed"] += 1
+                    self.tracker.update_stage(paper_id, "layout_extracted", success=False, error="Poster file not found")
                     continue
 
                 layout = descriptor.describe_poster(
                     str(poster_path),
                     paper_id
                 )
-                layout.save(desc_dir / f"{paper_id}_layout.json")
+                layout.save(layout_path)
+
+                # Count sections
+                section_count = len(layout.sections) if layout.sections else 0
+
+                # Update tracker
+                self.tracker.update_stage(
+                    paper_id, "layout_extracted", success=True,
+                    layout_json_path=str(layout_path.relative_to(self.config.output_dir)),
+                    section_count=section_count
+                )
+
                 stats["processed"] += 1
 
             except Exception as e:
                 print(f"Error describing poster {paper_id}: {e}")
                 stats["failed"] += 1
+                self.tracker.update_stage(paper_id, "layout_extracted", success=False, error=str(e))
 
         del descriptor
         self._free_gpu_memory()
@@ -402,13 +523,22 @@ class StagedPipeline:
 
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Combining outputs"):
             paper_id = str(row['paper_id'])
+            training_path = training_dir / f"{paper_id}.json"
 
             # Check if already done
-            if (training_dir / f"{paper_id}.json").exists():
+            if training_path.exists():
                 stats["skipped"] += 1
+                # Update tracker
+                self.tracker.update_stage(
+                    paper_id, "training_data_created", success=True,
+                    training_data_path=str(training_path.relative_to(self.config.output_dir))
+                )
+                self.tracker.mark_complete(paper_id)
                 continue
 
             try:
+                start_time = time.time()
+
                 # Load all components
                 poster_md = self._load_markdown(
                     self.config.output_dir / self.config.poster_parsed_dir / paper_id
@@ -425,6 +555,10 @@ class StagedPipeline:
 
                 if not all([poster_md, paper_md, layout]):
                     stats["failed"] += 1
+                    self.tracker.update_stage(
+                        paper_id, "training_data_created", success=False,
+                        error="Missing required components"
+                    )
                     continue
 
                 # Create training example
@@ -440,14 +574,24 @@ class StagedPipeline:
                     "year": int(row.get('year', 0)) if pd.notna(row.get('year')) else 0,
                 }
 
-                with open(training_dir / f"{paper_id}.json", 'w') as f:
+                with open(training_path, 'w') as f:
                     json.dump(example, f, indent=2)
+
+                processing_time = time.time() - start_time
+
+                # Update tracker
+                self.tracker.update_stage(
+                    paper_id, "training_data_created", success=True,
+                    training_data_path=str(training_path.relative_to(self.config.output_dir))
+                )
+                self.tracker.mark_complete(paper_id, processing_time)
 
                 stats["processed"] += 1
 
             except Exception as e:
                 print(f"Error combining {paper_id}: {e}")
                 stats["failed"] += 1
+                self.tracker.update_stage(paper_id, "training_data_created", success=False, error=str(e))
 
         return stats
 
@@ -495,6 +639,46 @@ class StagedPipeline:
         with open(path, 'r') as f:
             data = json.load(f)
         return data.get("matches", [])
+
+    def export_tracking(
+        self,
+        source_df: pd.DataFrame,
+        output_path: str = None,
+        format: str = "csv"
+    ) -> pd.DataFrame:
+        """
+        Export tracking data merged with source dataframe.
+
+        Args:
+            source_df: Original dataframe (train.csv, etc.)
+            output_path: Where to save (optional)
+            format: "csv" or "parquet"
+
+        Returns:
+            Merged dataframe with tracking columns
+        """
+        merged = self.tracker.merge_with_source(source_df)
+
+        if output_path:
+            if format == "parquet":
+                merged.to_parquet(output_path, index=False)
+            else:
+                merged.to_csv(output_path, index=False)
+            print(f"Exported tracking data to {output_path}")
+
+        return merged
+
+    def get_tracking_summary(self) -> Dict[str, Any]:
+        """Get processing summary from tracker."""
+        return self.tracker.get_summary()
+
+    def get_pending_items(self, stage: str = None) -> List[str]:
+        """Get paper IDs that haven't completed a stage."""
+        return self.tracker.get_pending(stage)
+
+    def get_failed_items(self) -> List[str]:
+        """Get paper IDs that have errors."""
+        return self.tracker.get_failed()
 
 
 class MultiGPUPipeline:

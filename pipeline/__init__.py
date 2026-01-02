@@ -59,6 +59,7 @@ from .figure_matcher import VLMFigureMatcher, create_figure_matcher
 from .poster_descriptor import PosterDescriptor, create_poster_descriptor
 from .pipeline import PaperToPosterPipeline, create_pipeline
 from .parallel import StagedPipeline, MultiGPUPipeline, create_parallel_pipeline
+from .tracking import ProcessingStatus, ProcessingTracker, create_tracker
 
 __version__ = "0.1.0"
 
@@ -90,4 +91,8 @@ __all__ = [
     "StagedPipeline",
     "MultiGPUPipeline",
     "create_parallel_pipeline",
+    # Tracking
+    "ProcessingStatus",
+    "ProcessingTracker",
+    "create_tracker",
 ]

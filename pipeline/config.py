@@ -13,7 +13,7 @@ import os
 @dataclass
 class DolphinConfig:
     """Configuration for Dolphin document parser."""
-    model_path: str = "./hf_model"  # Path to Dolphin model
+    model_path: str = "/home/majd/Documents/Projects/Dolphin/hf_model"  # Path to Dolphin model
     device: str = "cuda"
     batch_size: int = 1
     # Output settings
