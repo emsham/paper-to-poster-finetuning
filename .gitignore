@@ -1,4 +1,11 @@
 images/
-
 papers/
 archive/
+
+# Pipeline outputs
+pipeline_output/
+test_output/
+hf_model/
+*.pyc
+__pycache__/
+.ipynb_checkpoints/
