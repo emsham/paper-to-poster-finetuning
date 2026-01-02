@@ -1,0 +1,6 @@
+Poster: test_tracking_output/poster_parsed/37030/markdown/figures/37030_figure_030.png
+Paper: test_tracking_output/paper_parsed/37030/markdown/figures/37030_page_007_figure_001.png
+Feature ratio: 0.256
+VLM verdict: same
+VLM confidence: 1.00
+Reasoning: The two figures are identical in every aspect: same data points, same chart type (scatter plots), same axes labels and ranges, same legend, same annotations (e.g., 17.86, 6.93, λ=0.05), and same overall pattern/trend. The only difference is the file format (image vs. PDF), but the visual content is exactly the same.

@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-01-02T11:37:54.629603",
+  "poster_figures_count": 14,
+  "paper_figures_count": 6,
+  "candidates_found": 3,
+  "matches": [
+    {
+      "poster_figure": {
+        "figure_id": "37030_figure_030",
+        "source_doc": "poster",
+        "file_path": "test_output_staged/poster_parsed/37030/markdown/figures/37030_figure_030.png",
+        "bbox": null,
+        "caption": null,
+        "figure_type": null,
+        "page_number": 1
+      },
+      "paper_figure": {
+        "figure_id": "37030_page_007_figure_001",
+        "source_doc": "paper",
+        "file_path": "test_output_staged/paper_parsed/37030/markdown/figures/37030_page_007_figure_001.png",
+        "bbox": null,
+        "caption": null,
+        "figure_type": null,
+        "page_number": 1
+      },
+      "match_confidence": "high",
+      "feature_score": 0.256,
+      "vlm_verdict": "same",
+      "vlm_confidence": 1.0,
+      "vlm_reasoning": "Both figures display identical scatter plots with the same data points, axes labels, ranges, legend, and annotations. The only difference is the background color (white vs. light gray), which does not affect the content or meaning of the visualization."
+    }
+  ]
+}

@@ -1,0 +1,218 @@
+{
+  "paper_id": "37030",
+  "poster_path": "archive/test_set/37030.png",
+  "poster": {
+    "orientation": "portrait",
+    "aspect_ratio": "4:3",
+    "background": "#ffffff"
+  },
+  "header": {
+    "height_pct": 15,
+    "background": "#ffffff",
+    "gradient_colors": null,
+    "title_alignment": "center",
+    "logo_positions": [
+      "left",
+      "right"
+    ],
+    "has_author_affiliation_superscripts": true
+  },
+  "footer": {
+    "present": true,
+    "height_pct": 5,
+    "background": "#ffffff",
+    "content": "none"
+  },
+  "body": {
+    "columns": 1,
+    "column_widths": [
+      "equal"
+    ],
+    "gutter_pct": 0
+  },
+  "sections": [
+    {
+      "id": 1,
+      "title": "Generative Trilemma",
+      "column": 1,
+      "column_span": 1,
+      "row_in_column": 1,
+      "height_pct": 15,
+      "style": {
+        "header_bg": "#ffffff",
+        "header_text_color": "#000000",
+        "body_bg": "#ffffff",
+        "border": "#000000",
+        "border_radius": "none"
+      },
+      "content_type": "mixed",
+      "content_layout": {
+        "arrangement": "horizontal",
+        "split": "text-left figure-right",
+        "figure_count": 1,
+        "has_equations": false,
+        "has_tables": false
+      }
+    },
+    {
+      "id": 2,
+      "title": "Unpaired Image-to-image Translation",
+      "column": 1,
+      "column_span": 1,
+      "row_in_column": 2,
+      "height_pct": 15,
+      "style": {
+        "header_bg": "#ffffff",
+        "header_text_color": "#000000",
+        "body_bg": "#ffffff",
+        "border": "#000000",
+        "border_radius": "none"
+      },
+      "content_type": "mixed",
+      "content_layout": {
+        "arrangement": "horizontal",
+        "split": "text-left figure-right",
+        "figure_count": 1,
+        "has_equations": true,
+        "has_tables": false
+      }
+    },
+    {
+      "id": 3,
+      "title": "Diffusion Models",
+      "column": 1,
+      "column_span": 1,
+      "row_in_column": 3,
+      "height_pct": 15,
+      "style": {
+        "header_bg": "#ffffff",
+        "header_text_color": "#000000",
+        "body_bg": "#ffffff",
+        "border": "#000000",
+        "border_radius": "none"
+      },
+      "content_type": "text",
+      "content_layout": {
+        "arrangement": "vertical",
+        "split": "none",
+        "figure_count": 0,
+        "has_equations": true,
+        "has_tables": false
+      }
+    },
+    {
+      "id": 4,
+      "title": "Distribution Matching Distillation",
+      "column": 1,
+      "column_span": 1,
+      "row_in_column": 4,
+      "height_pct": 15,
+      "style": {
+        "header_bg": "#ffffff",
+        "header_text_color": "#000000",
+        "body_bg": "#ffffff",
+        "border": "#000000",
+        "border_radius": "none"
+      },
+      "content_type": "mixed",
+      "content_layout": {
+        "arrangement": "horizontal",
+        "split": "text-left figure-right",
+        "figure_count": 1,
+        "has_equations": true,
+        "has_tables": false
+      }
+    },
+    {
+      "id": 5,
+      "title": "Regularized Distribution Matching Distillation",
+      "column": 1,
+      "column_span": 1,
+      "row_in_column": 5,
+      "height_pct": 25,
+      "style": {
+        "header_bg": "#ffffff",
+        "header_text_color": "#000000",
+        "body_bg": "#ffffff",
+        "border": "#000000",
+        "border_radius": "none"
+      },
+      "content_type": "mixed",
+      "content_layout": {
+        "arrangement": "horizontal",
+        "split": "text-left figure-right",
+        "figure_count": 2,
+        "has_equations": true,
+        "has_tables": false
+      }
+    }
+  ],
+  "figures": [
+    {
+      "id": 1,
+      "section_id": 1,
+      "caption": "Generative Trilemma Venn diagram",
+      "position": "right side of section 1",
+      "type": "diagram",
+      "description": "Venn diagram with three overlapping circles labeled GAN, Diffusion, VAE, with text labels for High Quality, Fast Sampling, Mode Coverage, and a question mark."
+    },
+    {
+      "id": 2,
+      "section_id": 2,
+      "caption": "Performance example of image translation",
+      "position": "right side of section 2",
+      "type": "image",
+      "description": "Grid of 8 images showing cat-to-animals translation results."
+    },
+    {
+      "id": 3,
+      "section_id": 4,
+      "caption": "Distribution Matching Distillation equations",
+      "position": "right side of section 4",
+      "type": "equation",
+      "description": "Two equations for training a one-step generator with distribution matching distillation."
+    },
+    {
+      "id": 4,
+      "section_id": 5,
+      "caption": "Comparison with diffusion baselines",
+      "position": "right side of section 5",
+      "type": "chart",
+      "description": "Three line charts comparing FID, L2 transport cost, and SSIM scores for different methods."
+    },
+    {
+      "id": 5,
+      "section_id": 5,
+      "caption": "Gaussian \u2192 SwissRoll",
+      "position": "bottom right of section 5",
+      "type": "chart",
+      "description": "Five scatter plots showing the effect of regularization parameter \u03bb on distribution matching."
+    }
+  ],
+  "flowcharts": [],
+  "special_elements": [
+    {
+      "type": "qr_code",
+      "position": "top left corner",
+      "description": "QR code for arXiv link"
+    },
+    {
+      "type": "logo",
+      "position": "top right corner",
+      "description": "SPIGM @ ICML logo"
+    },
+    {
+      "type": "highlight_box",
+      "position": "center of section 1",
+      "description": "Box highlighting RDMD (ours) contributions"
+    }
+  ],
+  "color_scheme": {
+    "primary": "#000000",
+    "secondary": "#000000",
+    "accent": "#ff9900",
+    "text": "#000000",
+    "background": "#ffffff"
+  },
+  "reading_order": "top-to-bottom"
+}

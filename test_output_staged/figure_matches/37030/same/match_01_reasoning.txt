@@ -1,0 +1,6 @@
+Poster: test_output_staged/poster_parsed/37030/markdown/figures/37030_figure_030.png
+Paper: test_output_staged/paper_parsed/37030/markdown/figures/37030_page_007_figure_001.png
+Feature ratio: 0.256
+VLM verdict: same
+VLM confidence: 1.00
+Reasoning: Both figures display identical scatter plots with the same data points, axes labels, ranges, legend, and annotations. The only difference is the background color (white vs. light gray), which does not affect the content or meaning of the visualization.
