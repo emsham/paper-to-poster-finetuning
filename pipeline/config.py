@@ -33,6 +33,9 @@ class VLMMatcherConfig:
     # Matching thresholds
     high_confidence_threshold: float = 0.6
     medium_confidence_threshold: float = 0.5
+    # Feature-only mode (skip VLM for faster/cheaper processing)
+    use_vlm: bool = True  # Set to False for feature-only matching
+    feature_match_threshold: float = 0.25  # Combined score threshold when use_vlm=False
 
 
 @dataclass
@@ -44,6 +47,30 @@ class PosterDescriptorConfig:
     max_new_tokens: int = 4096
     temperature: float = 0.1
     do_sample: bool = True
+
+
+@dataclass
+class MarkerConfig:
+    """Configuration for marker-pdf parser (fast CPU-based)."""
+    extract_figures: bool = True
+    min_figure_size: int = 100  # Minimum width/height in pixels
+    output_format: str = "markdown"
+
+
+@dataclass
+class ClaudeConfig:
+    """Configuration for Claude API (poster processing)."""
+    api_key: str = ""  # From env var ANTHROPIC_API_KEY
+    model: str = "claude-3-haiku-20240307"
+    max_tokens: int = 4096
+    temperature: float = 0.1
+    timeout: int = 60
+    max_retries: int = 3
+    base_url: str = "https://api.anthropic.com/v1"
+
+    def __post_init__(self):
+        if not self.api_key:
+            self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
 
 @dataclass
@@ -65,10 +92,17 @@ class PipelineConfig:
     poster_descriptions_dir: str = "poster_descriptions"
     training_data_dir: str = "training_data"
 
-    # Component configs
+    # Component configs (original - GPU based)
     dolphin: DolphinConfig = field(default_factory=DolphinConfig)
     vlm_matcher: VLMMatcherConfig = field(default_factory=VLMMatcherConfig)
     poster_descriptor: PosterDescriptorConfig = field(default_factory=PosterDescriptorConfig)
+
+    # Component configs (simplified - CPU/API based)
+    marker: MarkerConfig = field(default_factory=MarkerConfig)
+    claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+
+    # Pipeline mode
+    use_simple_pipeline: bool = False  # True = use marker+claude, False = use dolphin+qwen
 
     # Processing options
     num_workers: int = 1

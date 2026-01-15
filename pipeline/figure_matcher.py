@@ -300,64 +300,124 @@ Only respond with the JSON, nothing else."""
             print("No candidates found. Try lowering feature_threshold")
             return []
 
-        # PASS 2: VLM comparison
-        print("\nPASS 2: VLM semantic comparison...")
-        self.load_model()
-
+        # PASS 2: VLM comparison OR feature-only matching
         matches = []
-        for i, candidate in enumerate(candidates):
-            print(f"\n[{i+1}/{len(candidates)}] Comparing:")
-            print(f"  Poster: {Path(candidate.poster_figure.file_path).name[:50]}")
-            print(f"  Paper:  {Path(candidate.paper_figure.file_path).name[:50]}")
-            print(f"  Feature ratio: {candidate.feature_ratio:.1%}")
 
-            # Run VLM comparison
-            vlm_result = self.vlm_compare(
-                candidate.poster_figure.file_path,
-                candidate.paper_figure.file_path
-            )
+        if self.config.use_vlm:
+            # Use VLM for semantic comparison
+            print("\nPASS 2: VLM semantic comparison...")
+            self.load_model()
 
-            verdict = vlm_result["verdict"]
-            confidence = vlm_result["confidence"]
-            reasoning = vlm_result["reasoning"]
+            for i, candidate in enumerate(candidates):
+                print(f"\n[{i+1}/{len(candidates)}] Comparing:")
+                print(f"  Poster: {Path(candidate.poster_figure.file_path).name[:50]}")
+                print(f"  Paper:  {Path(candidate.paper_figure.file_path).name[:50]}")
+                print(f"  Feature ratio: {candidate.feature_ratio:.1%}")
 
-            print(f"  VLM verdict: {verdict.upper()} (confidence: {confidence:.2f})")
+                # Run VLM comparison
+                vlm_result = self.vlm_compare(
+                    candidate.poster_figure.file_path,
+                    candidate.paper_figure.file_path
+                )
 
-            # Determine final match status
-            if verdict == "same" and confidence >= self.config.high_confidence_threshold:
-                is_match = True
-                final_confidence = "high"
-            elif verdict == "same" or (verdict == "similar" and confidence >= 0.7):
-                is_match = True
-                final_confidence = "medium"
-            elif verdict == "similar":
-                is_match = True
-                final_confidence = "low"
-            else:
-                is_match = False
-                final_confidence = "none"
+                verdict = vlm_result["verdict"]
+                confidence = vlm_result["confidence"]
+                reasoning = vlm_result["reasoning"]
 
-            if is_match:
+                print(f"  VLM verdict: {verdict.upper()} (confidence: {confidence:.2f})")
+
+                # Determine final match status
+                if verdict == "same" and confidence >= self.config.high_confidence_threshold:
+                    is_match = True
+                    final_confidence = "high"
+                elif verdict == "same" or (verdict == "similar" and confidence >= 0.7):
+                    is_match = True
+                    final_confidence = "medium"
+                elif verdict == "similar":
+                    is_match = True
+                    final_confidence = "low"
+                else:
+                    is_match = False
+                    final_confidence = "none"
+
+                if is_match:
+                    match = FigureMatch(
+                        poster_figure=candidate.poster_figure,
+                        paper_figure=candidate.paper_figure,
+                        match_confidence=final_confidence,
+                        feature_score=candidate.feature_ratio,
+                        vlm_verdict=verdict,
+                        vlm_confidence=confidence,
+                        vlm_reasoning=reasoning
+                    )
+                    matches.append(match)
+
+                    # Save to output directory
+                    if output_dir:
+                        if verdict == "same":
+                            save_dir = output_path / "same"
+                        elif verdict == "similar":
+                            save_dir = output_path / "similar"
+                        else:
+                            save_dir = output_path / "uncertain"
+
+                        match_idx = len(list(save_dir.glob("match_*_poster*"))) + 1
+                        poster_ext = Path(candidate.poster_figure.file_path).suffix
+                        paper_ext = Path(candidate.paper_figure.file_path).suffix
+
+                        shutil.copy(
+                            candidate.poster_figure.file_path,
+                            save_dir / f"match_{match_idx:02d}_poster{poster_ext}"
+                        )
+                        shutil.copy(
+                            candidate.paper_figure.file_path,
+                            save_dir / f"match_{match_idx:02d}_paper{paper_ext}"
+                        )
+
+                        # Save reasoning
+                        with open(save_dir / f"match_{match_idx:02d}_reasoning.txt", 'w') as f:
+                            f.write(f"Poster: {candidate.poster_figure.file_path}\n")
+                            f.write(f"Paper: {candidate.paper_figure.file_path}\n")
+                            f.write(f"Feature ratio: {candidate.feature_ratio:.3f}\n")
+                            f.write(f"VLM verdict: {verdict}\n")
+                            f.write(f"VLM confidence: {confidence:.2f}\n")
+                            f.write(f"Reasoning: {reasoning}\n")
+        else:
+            # Feature-only mode (no VLM, much faster)
+            print("\nPASS 2: Feature-based matching (VLM disabled)...")
+            threshold = self.config.feature_match_threshold
+
+            for i, candidate in enumerate(candidates):
+                score = candidate.combined_score
+
+                # Determine confidence based on combined score
+                if score >= 0.5:
+                    final_confidence = "high"
+                    verdict = "same"
+                elif score >= threshold:
+                    final_confidence = "medium"
+                    verdict = "similar"
+                else:
+                    continue  # Below threshold, skip
+
+                print(f"[{i+1}/{len(candidates)}] {Path(candidate.poster_figure.file_path).name[:30]} "
+                      f"<-> {Path(candidate.paper_figure.file_path).name[:30]} "
+                      f"| score: {score:.2f} | {final_confidence}")
+
                 match = FigureMatch(
                     poster_figure=candidate.poster_figure,
                     paper_figure=candidate.paper_figure,
                     match_confidence=final_confidence,
                     feature_score=candidate.feature_ratio,
                     vlm_verdict=verdict,
-                    vlm_confidence=confidence,
-                    vlm_reasoning=reasoning
+                    vlm_confidence=score,  # Use combined score as confidence
+                    vlm_reasoning="Feature-based matching (VLM disabled)"
                 )
                 matches.append(match)
 
                 # Save to output directory
                 if output_dir:
-                    if verdict == "same":
-                        save_dir = output_path / "same"
-                    elif verdict == "similar":
-                        save_dir = output_path / "similar"
-                    else:
-                        save_dir = output_path / "uncertain"
-
+                    save_dir = output_path / ("same" if verdict == "same" else "similar")
                     match_idx = len(list(save_dir.glob("match_*_poster*"))) + 1
                     poster_ext = Path(candidate.poster_figure.file_path).suffix
                     paper_ext = Path(candidate.paper_figure.file_path).suffix
@@ -370,15 +430,6 @@ Only respond with the JSON, nothing else."""
                         candidate.paper_figure.file_path,
                         save_dir / f"match_{match_idx:02d}_paper{paper_ext}"
                     )
-
-                    # Save reasoning
-                    with open(save_dir / f"match_{match_idx:02d}_reasoning.txt", 'w') as f:
-                        f.write(f"Poster: {candidate.poster_figure.file_path}\n")
-                        f.write(f"Paper: {candidate.paper_figure.file_path}\n")
-                        f.write(f"Feature ratio: {candidate.feature_ratio:.3f}\n")
-                        f.write(f"VLM verdict: {verdict}\n")
-                        f.write(f"VLM confidence: {confidence:.2f}\n")
-                        f.write(f"Reasoning: {reasoning}\n")
 
         # Summary
         print(f"\n{'='*70}")
