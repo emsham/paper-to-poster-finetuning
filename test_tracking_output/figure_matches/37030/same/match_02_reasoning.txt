@@ -1,6 +1,0 @@
-Poster: test_tracking_output/poster_parsed/37030/markdown/figures/37030_figure_029.png
-Paper: test_tracking_output/paper_parsed/37030/markdown/figures/37030_page_007_figure_005.png
-Feature ratio: 0.148
-VLM verdict: same
-VLM confidence: 1.00
-Reasoning: Both figures display the same 5x5 grid of animal images (cats, foxes, tigers, lions, leopards) with identical input and method labels (Input, RDMD, EGSDE, ILVR, SDEdit). The arrangement and content of each cell are identical, indicating they are the same figure, possibly from different sources or formats (poster vs paper) but not altered in content.

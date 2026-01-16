@@ -4,8 +4,26 @@ archive/
 
 # Pipeline outputs
 pipeline_output/
+simple_pipeline_output/
 test_output/
+test_*_output/
 hf_model/
+
+# Python
 *.pyc
 __pycache__/
 .ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# API keys (never commit these!)
+.env
+*.env
