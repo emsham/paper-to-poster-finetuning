@@ -111,11 +111,14 @@ JSON OUTPUT:"""
 
             sections = json.loads(response_text)
             sections['full'] = paper_content
+            sections['_extraction_method'] = 'llm'
             return sections
 
         except Exception as e:
             print(f"LLM extraction failed: {e}, falling back to regex")
-            return extract_sections_regex(paper_content)
+            fallback = extract_sections_regex(paper_content)
+            fallback['_extraction_method'] = 'llm_fallback_regex'
+            return fallback
 
 
 def estimate_tokens(text: str) -> int:
@@ -181,6 +184,7 @@ def extract_sections_regex(markdown: str) -> Dict[str, str]:
     sections['methods'] = find_section(methods_names, 3000)
     sections['results'] = find_section(results_names, 3000)
     sections['conclusion'] = find_section(conclusion_names, 2000)
+    sections['_extraction_method'] = 'regex'
 
     return sections
 
@@ -196,7 +200,7 @@ def extract_sections(markdown: str) -> Dict[str, str]:
     return extract_sections_regex(markdown)
 
 
-def truncate_paper(paper_content: str, max_chars: int, strategy: str = 'smart') -> str:
+def truncate_paper(paper_content: str, max_chars: int, strategy: str = 'smart') -> tuple:
     """
     Truncate paper content to fit context window.
 
@@ -204,18 +208,22 @@ def truncate_paper(paper_content: str, max_chars: int, strategy: str = 'smart') 
     - 'smart': Keep abstract + intro + conclusion
     - 'head': Keep first N characters
     - 'none': No truncation
+
+    Returns:
+        tuple: (truncated_content, extraction_method)
     """
     if len(paper_content) <= max_chars:
-        return paper_content
+        return paper_content, 'none_needed'
 
     if strategy == 'none':
-        return paper_content
+        return paper_content, 'none'
 
     if strategy == 'head':
-        return paper_content[:max_chars] + "\n\n[Content truncated...]"
+        return paper_content[:max_chars] + "\n\n[Content truncated...]", 'head'
 
     if strategy == 'smart':
         sections = extract_sections(paper_content)
+        extraction_method = sections.get('_extraction_method', 'unknown')
 
         # Build truncated version
         parts = []
@@ -239,16 +247,16 @@ def truncate_paper(paper_content: str, max_chars: int, strategy: str = 'smart') 
 
         # If still too long, fall back to head truncation
         if len(truncated) > max_chars:
-            return truncated[:max_chars] + "\n\n[Content truncated...]"
+            return truncated[:max_chars] + "\n\n[Content truncated...]", extraction_method
 
         # If we have room, add more content
         remaining = max_chars - len(truncated) - 100
         if remaining > 1000 and len(paper_content) > len(truncated):
             truncated += f"\n\n## Additional Content\n{paper_content[len(truncated):len(truncated)+remaining]}"
 
-        return truncated
+        return truncated, extraction_method
 
-    return paper_content[:max_chars]
+    return paper_content[:max_chars], 'fallback'
 
 
 def format_for_training(
@@ -334,9 +342,15 @@ def prepare_dataset(
     use_llm = _llm_extractor is not None
     desc = "Processing (LLM)" if use_llm else "Processing"
 
+    # Track extraction methods
+    extraction_counts = {}
+
     for ex in tqdm(full_examples, desc=desc, disable=not TQDM_AVAILABLE):
         original_len = len(ex['input'])
-        truncated_input = truncate_paper(ex['input'], max_input_chars, truncation_strategy)
+        truncated_input, extraction_method = truncate_paper(ex['input'], max_input_chars, truncation_strategy)
+
+        # Track extraction method stats
+        extraction_counts[extraction_method] = extraction_counts.get(extraction_method, 0) + 1
 
         if len(truncated_input) < original_len:
             stats['truncated'] += 1
@@ -349,7 +363,11 @@ def prepare_dataset(
             ex['output'],
             output_format
         )
-        formatted['_meta'] = {'type': 'full', 'original_len': original_len}
+        formatted['_meta'] = {
+            'type': 'full',
+            'original_len': original_len,
+            'extraction_method': extraction_method
+        }
         processed.append(formatted)
 
     # Process partial examples (no truncation needed)
@@ -404,6 +422,9 @@ def prepare_dataset(
     print(f"Truncated: {stats['truncated']}")
     print(f"Kept full: {stats['kept_full']}")
     print(f"Partial (no paper): {stats['partial']}")
+    print(f"\nExtraction methods:")
+    for method, count in sorted(extraction_counts.items()):
+        print(f"  {method}: {count}")
     print(f"\nTrain examples: {len(train_data)}")
     print(f"Val examples: {len(val_data)}")
     print(f"\nOutput files:")
