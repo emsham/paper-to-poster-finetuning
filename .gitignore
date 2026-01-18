@@ -1,6 +1,7 @@
+# Data files (too large for git - download separately)
 images/
 papers/
-archive/
+*.csv
 
 # Pipeline outputs
 pipeline_output/
@@ -9,6 +10,12 @@ test_output/
 test_*_output/
 hf_model/
 
+# Archive (old exploration files)
+archive/
+
+# Logs
+*.log
+
 # Python
 *.pyc
 __pycache__/
@@ -16,14 +23,23 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
+venv/
 
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store
+Thumbs.db
 
 # API keys (never commit these!)
 .env
 *.env
+
+# Temporary files
+*.tmp
+*.bak
+prepared_data/

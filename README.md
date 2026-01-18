@@ -2,18 +2,30 @@
 
 A pipeline for creating training data from academic paper-poster pairs. The goal is to finetune an LLM that can generate academic posters from research papers.
 
+## Results
+
+We processed **7,351 paper-poster pairs** and successfully generated **7,307 training examples** (99.4% success rate).
+
+| Metric | Value |
+|--------|-------|
+| Training examples | 7,307 |
+| Success rate | 99.4% |
+| Total API cost | ~$22 |
+| Processing time | ~12 hours |
+| Output file | `training_data.jsonl` (291 MB) |
+
 ## Overview
 
-This pipeline processes ~16k paper-poster pairs to create training data where:
+This pipeline processes paper-poster pairs to create training data where:
 - **Input**: Research paper (markdown + metadata)
 - **Output**: Poster layout (JSON) + poster content (markdown)
 
 ### Two Pipeline Options
 
-| Pipeline | Cost (16k items) | Time | Hardware | Best For |
-|----------|------------------|------|----------|----------|
-| **Simple** (Recommended) | ~$48 | 1-2 days | CPU + API | Most users, budget-conscious |
-| **Original** | ~$1,100+ | 18+ days | 6+ GPUs | Maximum quality, research |
+| Pipeline | Cost (7k items) | Time | Hardware | Best For |
+|----------|-----------------|------|----------|----------|
+| **Simple** (Recommended) | ~$22 | ~12 hrs | CPU + API | Most users, budget-conscious |
+| **Original** | ~$500+ | 10+ days | 6+ GPUs | Maximum quality, research |
 
 ---
 
@@ -767,12 +779,14 @@ ValueError: Claude API key required
 Solution: Set `ANTHROPIC_API_KEY` environment variable or pass `--api-key`
 
 **Rate Limiting (429 errors):**
-- Reduce `--concurrency` to 10-20
-- The pipeline has automatic retry with backoff
+- Reduce `--concurrency` to 10 (default)
+- The pipeline automatically retries with exponential backoff (up to 5 retries)
+- Respects `Retry-After` headers from the API
 
 **Large Images (400 errors):**
-- Some poster images may be too large
-- Consider resizing images before processing
+- The pipeline automatically resizes images that exceed Claude's 5MB base64 limit
+- Images are progressively compressed (JPEG quality reduction, then scaling)
+- No manual intervention needed
 
 ### Original Pipeline
 
@@ -782,6 +796,281 @@ Solution: Set `ANTHROPIC_API_KEY` environment variable or pass `--api-key`
 
 **Missing Transformers Classes:**
 - Update transformers: `pip install -U transformers`
+
+---
+
+## Finetuning Guide
+
+Once you have the training data (`training_data.jsonl`), here's how to finetune a model.
+
+### Training Data Format
+
+Each line in `training_data.jsonl` is a JSON object:
+
+```json
+{
+  "instruction": "Generate an academic poster for the following research paper.\n\nTitle: ...\n\nAbstract: ...",
+  "input": "[Full paper markdown content]",
+  "output": "{\"layout\": {...}, \"content\": \"[Poster markdown]\"}"
+}
+```
+
+### Option 1: Finetune with Hugging Face + LoRA (Recommended)
+
+Best for: Limited GPU resources, quick iteration
+
+#### 1. Install Dependencies
+
+```bash
+pip install transformers datasets peft accelerate bitsandbytes
+pip install trl  # For SFTTrainer
+```
+
+#### 2. Prepare Dataset
+
+```python
+from datasets import load_dataset
+
+# Load the JSONL file
+dataset = load_dataset("json", data_files="training_data.jsonl")
+
+# Split into train/val
+dataset = dataset["train"].train_test_split(test_size=0.1)
+print(f"Train: {len(dataset['train'])}, Val: {len(dataset['test'])}")
+```
+
+#### 3. Finetune Script
+
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+# Configuration
+MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"  # Or Llama, Qwen, etc.
+OUTPUT_DIR = "./poster-model"
+MAX_LENGTH = 8192  # Adjust based on your GPU memory
+
+# Load dataset
+dataset = load_dataset("json", data_files="training_data.jsonl")
+dataset = dataset["train"].train_test_split(test_size=0.1)
+
+# Format for instruction tuning
+def format_example(example):
+    return {
+        "text": f"### Instruction:\n{example['instruction']}\n\n### Input:\n{example['input'][:4000]}\n\n### Response:\n{example['output']}"
+    }
+
+dataset = dataset.map(format_example)
+
+# Quantization config (for fitting on consumer GPUs)
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+# Load model
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    quantization_config=bnb_config,
+    device_map="auto",
+    trust_remote_code=True,
+)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer.pad_token = tokenizer.eos_token
+
+# LoRA config
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+model = prepare_model_for_kbit_training(model)
+model = get_peft_model(model, lora_config)
+
+# Training config
+training_args = SFTConfig(
+    output_dir=OUTPUT_DIR,
+    num_train_epochs=3,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    learning_rate=2e-4,
+    warmup_ratio=0.1,
+    logging_steps=10,
+    save_steps=100,
+    eval_strategy="steps",
+    eval_steps=100,
+    bf16=True,
+    max_seq_length=MAX_LENGTH,
+    dataset_text_field="text",
+)
+
+# Train
+trainer = SFTTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset["train"],
+    eval_dataset=dataset["test"],
+    tokenizer=tokenizer,
+)
+
+trainer.train()
+trainer.save_model(OUTPUT_DIR)
+```
+
+#### 4. Run Training
+
+```bash
+# Single GPU
+python train.py
+
+# Multi-GPU with accelerate
+accelerate launch --num_processes 4 train.py
+```
+
+### Option 2: Full Finetuning with DeepSpeed
+
+Best for: Multiple GPUs, maximum quality
+
+```bash
+# Install DeepSpeed
+pip install deepspeed
+
+# Create deepspeed config (ds_config.json)
+```
+
+```json
+{
+  "bf16": {"enabled": true},
+  "zero_optimization": {
+    "stage": 3,
+    "offload_optimizer": {"device": "cpu"},
+    "offload_param": {"device": "cpu"}
+  },
+  "gradient_accumulation_steps": 8,
+  "train_batch_size": 32
+}
+```
+
+```bash
+# Run with DeepSpeed
+deepspeed --num_gpus 4 train.py --deepspeed ds_config.json
+```
+
+### Option 3: Cloud Finetuning Services
+
+For those without local GPU access:
+
+#### Together AI
+```bash
+pip install together
+
+# Upload dataset
+together files upload training_data.jsonl
+
+# Start finetuning job
+together fine-tuning create \
+  --training-file file-xxx \
+  --model mistralai/Mistral-7B-Instruct-v0.2 \
+  --n-epochs 3
+```
+
+#### Modal
+```python
+# modal_train.py
+import modal
+
+app = modal.App("poster-finetune")
+
+@app.function(gpu="A100", timeout=3600*6)
+def train():
+    # Your training code here
+    pass
+```
+
+#### RunPod
+1. Launch a GPU pod (A100 recommended)
+2. Upload `training_data.jsonl`
+3. Run the training script above
+
+### Inference
+
+After training, generate posters:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+# Load base model + LoRA weights
+base_model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
+model = PeftModel.from_pretrained(base_model, "./poster-model")
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
+
+def generate_poster(paper_title, paper_abstract, paper_content):
+    prompt = f"""### Instruction:
+Generate an academic poster for the following research paper.
+
+Title: {paper_title}
+
+Abstract: {paper_abstract}
+
+### Input:
+{paper_content[:4000]}
+
+### Response:
+"""
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=2048,
+        temperature=0.7,
+        do_sample=True,
+    )
+
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return response.split("### Response:")[-1].strip()
+
+# Example usage
+result = generate_poster(
+    "My Paper Title",
+    "This paper presents...",
+    "## Introduction\n..."
+)
+print(result)
+```
+
+### Recommended Models for Finetuning
+
+| Model | Size | VRAM Needed | Notes |
+|-------|------|-------------|-------|
+| Mistral-7B-Instruct | 7B | 16GB (4-bit) | Good balance of quality/speed |
+| Llama-3-8B-Instruct | 8B | 20GB (4-bit) | Strong instruction following |
+| Qwen2-7B-Instruct | 7B | 16GB (4-bit) | Good multilingual support |
+| Mixtral-8x7B | 47B | 48GB (4-bit) | Best quality, needs more VRAM |
+
+### Tips for Better Results
+
+1. **Truncate long papers**: The full paper content can be very long. Consider using just the abstract + introduction + conclusion.
+
+2. **Focus on layout first**: Train a model to predict just the layout JSON, then a separate model for content.
+
+3. **Data augmentation**:
+   - Shuffle section order in some examples
+   - Add noise to layout percentages
+   - Include examples with different number of columns
+
+4. **Evaluation metrics**:
+   - JSON validity rate (can the output be parsed?)
+   - Layout similarity (do sections match expected structure?)
+   - Human evaluation for content quality
 
 ---
 
