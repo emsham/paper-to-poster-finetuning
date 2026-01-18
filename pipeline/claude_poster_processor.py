@@ -9,12 +9,17 @@ import os
 import json
 import base64
 import asyncio
+import io
 from pathlib import Path
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 import httpx
+from PIL import Image
 
 from .models import ParsedDocument, PosterLayout, ExtractedFigure
+
+# Claude's base64 image size limit (5MB)
+MAX_BASE64_SIZE = 5 * 1024 * 1024
 
 
 @dataclass
@@ -24,9 +29,11 @@ class ClaudeConfig:
     model: str = "claude-3-haiku-20240307"
     max_tokens: int = 4096
     temperature: float = 0.1
-    timeout: int = 60
-    max_retries: int = 3
+    timeout: int = 120  # Increased timeout for large images
+    max_retries: int = 5  # More retries for rate limiting
     base_url: str = "https://api.anthropic.com/v1"
+    retry_base_delay: float = 2.0  # Base delay for exponential backoff
+    max_retry_delay: float = 60.0  # Max delay between retries
 
     def __post_init__(self):
         if not self.api_key:
@@ -133,21 +140,76 @@ class ClaudePosterProcessor:
             )
 
     def _encode_image(self, image_path: Path) -> Tuple[str, str]:
-        """Encode image to base64 and determine media type."""
+        """
+        Encode image to base64 and determine media type.
+        Automatically resizes images that exceed Claude's 5MB base64 limit.
+        """
         suffix = image_path.suffix.lower()
-        media_types = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.gif': 'image/gif',
-            '.webp': 'image/webp'
-        }
-        media_type = media_types.get(suffix, 'image/png')
 
+        # Read original file
         with open(image_path, 'rb') as f:
-            image_data = base64.standard_b64encode(f.read()).decode('utf-8')
+            original_data = f.read()
 
-        return image_data, media_type
+        # Check if resizing is needed
+        original_b64_size = len(base64.standard_b64encode(original_data))
+
+        if original_b64_size <= MAX_BASE64_SIZE:
+            # Original is fine, use as-is
+            media_types = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp'
+            }
+            media_type = media_types.get(suffix, 'image/png')
+            image_data = base64.standard_b64encode(original_data).decode('utf-8')
+            return image_data, media_type
+
+        # Need to resize - open with PIL
+        img = Image.open(image_path)
+
+        # Convert RGBA to RGB if needed (for JPEG output)
+        if img.mode == 'RGBA':
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        # Progressively reduce size until under limit
+        quality = 85
+        scale = 1.0
+
+        while True:
+            # Resize if needed
+            if scale < 1.0:
+                new_size = (int(img.width * scale), int(img.height * scale))
+                resized = img.resize(new_size, Image.Resampling.LANCZOS)
+            else:
+                resized = img
+
+            # Encode to JPEG
+            buffer = io.BytesIO()
+            resized.save(buffer, format='JPEG', quality=quality, optimize=True)
+            jpeg_data = buffer.getvalue()
+            b64_size = len(base64.standard_b64encode(jpeg_data))
+
+            if b64_size <= MAX_BASE64_SIZE:
+                image_data = base64.standard_b64encode(jpeg_data).decode('utf-8')
+                return image_data, 'image/jpeg'
+
+            # Reduce quality or scale
+            if quality > 60:
+                quality -= 10
+            else:
+                scale *= 0.8
+
+            # Safety limit
+            if scale < 0.3:
+                # Force it through at minimum scale
+                image_data = base64.standard_b64encode(jpeg_data).decode('utf-8')
+                return image_data, 'image/jpeg'
 
     def _parse_response(
         self,
@@ -261,7 +323,7 @@ class ClaudePosterProcessor:
             ]
         }
 
-        # Make API request with retries
+        # Make API request with retries and exponential backoff
         response_text = ""
         last_error = None
 
@@ -281,18 +343,28 @@ class ClaudePosterProcessor:
                 except httpx.HTTPStatusError as e:
                     last_error = e
                     if e.response.status_code == 429:
-                        # Rate limited - wait and retry
-                        wait_time = 2 ** attempt
+                        # Rate limited - use Retry-After header or exponential backoff
+                        retry_after = e.response.headers.get("retry-after")
+                        if retry_after:
+                            wait_time = float(retry_after)
+                        else:
+                            # Exponential backoff with jitter
+                            wait_time = min(
+                                self.config.retry_base_delay * (2 ** attempt),
+                                self.config.max_retry_delay
+                            )
                         await asyncio.sleep(wait_time)
                     elif e.response.status_code >= 500:
-                        # Server error - retry
-                        await asyncio.sleep(1)
+                        # Server error - retry with backoff
+                        wait_time = self.config.retry_base_delay * (attempt + 1)
+                        await asyncio.sleep(wait_time)
                     else:
                         raise
 
                 except (httpx.TimeoutException, httpx.ConnectError) as e:
                     last_error = e
-                    await asyncio.sleep(1)
+                    wait_time = self.config.retry_base_delay * (attempt + 1)
+                    await asyncio.sleep(wait_time)
 
             else:
                 raise last_error or Exception("Max retries exceeded")

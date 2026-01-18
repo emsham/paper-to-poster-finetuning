@@ -87,8 +87,8 @@ Cost estimate: ~$0.003 per poster (Claude Haiku 3)
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=20,
-        help="Max concurrent API calls (default: 20)"
+        default=10,
+        help="Max concurrent API calls (default: 10, lower = less rate limiting)"
     )
     parser.add_argument(
         "--output-dir",
@@ -107,6 +107,11 @@ Cost estimate: ~$0.003 per poster (Claude Haiku 3)
         default="jsonl",
         choices=["jsonl", "json", "parquet"],
         help="Export format (default: jsonl)"
+    )
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip confirmation prompt (for automation)"
     )
 
     args = parser.parse_args()
@@ -172,7 +177,7 @@ Cost estimate: ~$0.003 per poster (Claude Haiku 3)
     print(f"{'='*70}\n")
 
     # Confirm
-    if num_items > 100:
+    if num_items > 100 and not args.yes:
         response = input(f"Process {num_items} items for ~${estimated_cost:.2f}? [y/N] ")
         if response.lower() != 'y':
             print("Aborted.")

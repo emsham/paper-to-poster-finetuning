@@ -390,10 +390,16 @@ class SimplePipeline:
 
         # Build items list
         items = []
+        skipped_missing_data = 0
         for _, row in df.iterrows():
             paper_id = str(row['paper_id'])
             poster_path = row['local_image_path']
             paper_path = row['local_pdf_path']
+
+            # Skip rows with missing paths (NaN values)
+            if pd.isna(poster_path) or pd.isna(paper_path):
+                skipped_missing_data += 1
+                continue
 
             # Validate files exist
             if not Path(poster_path).exists():
@@ -412,6 +418,9 @@ class SimplePipeline:
             }
 
             items.append((paper_id, poster_path, paper_path, metadata))
+
+        if skipped_missing_data > 0:
+            print(f"Skipped {skipped_missing_data} items with missing PDF/poster paths")
 
         print(f"\n{'='*70}")
         print(f"SIMPLE PIPELINE - Processing {len(items)} items")
