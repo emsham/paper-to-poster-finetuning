@@ -64,12 +64,14 @@ zip -r poster-mistral-lora.zip poster-mistral-lora/
 ## Inference
 
 ```bash
-# Generate poster from paper
-python generate_poster.py \
-    --model ./poster-mistral-lora \
-    --title "Your Paper Title" \
-    --abstract "Your abstract here" \
-    --output poster.json
+# Generate poster from paper (markdown)
+python generate_poster.py --paper paper.md --output poster.json
+
+# Generate poster from paper (PDF)
+python generate_poster.py --paper paper.pdf --output poster.json
+
+# With custom model path
+python generate_poster.py --model ./poster-mistral-lora --paper paper.pdf
 ```
 
 ## Troubleshooting

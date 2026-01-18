@@ -4,8 +4,8 @@ Generate Poster from Paper
 ==========================
 
 Usage:
-    python generate_poster.py --title "Paper Title" --abstract "Abstract text" --content "Paper content"
     python generate_poster.py --paper paper.md --output poster.json
+    python generate_poster.py --paper paper.pdf --output poster.json
 """
 
 import argparse
@@ -100,48 +100,64 @@ Abstract: {abstract}"""
 def main():
     parser = argparse.ArgumentParser(description="Generate poster from paper")
     parser.add_argument("--model", default="./poster-mistral-lora", help="Path to finetuned model")
-    parser.add_argument("--title", type=str, help="Paper title")
-    parser.add_argument("--abstract", type=str, help="Paper abstract")
-    parser.add_argument("--content", type=str, default="", help="Paper content (optional)")
-    parser.add_argument("--paper", type=str, help="Path to paper markdown file")
+    parser.add_argument("--paper", type=str, required=True, help="Path to paper (markdown or PDF)")
+    parser.add_argument("--title", type=str, help="Paper title (auto-extracted if not provided)")
+    parser.add_argument("--abstract", type=str, help="Paper abstract (auto-extracted if not provided)")
     parser.add_argument("--output", type=str, help="Output JSON file")
     parser.add_argument("--temperature", type=float, default=0.7, help="Generation temperature")
 
     args = parser.parse_args()
 
-    # Load paper from file if provided
-    if args.paper:
-        with open(args.paper, 'r') as f:
+    import re
+    from pathlib import Path
+
+    paper_path = Path(args.paper)
+
+    # Handle PDF files
+    if paper_path.suffix.lower() == '.pdf':
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(str(paper_path))
+            paper_content = ""
+            for page in doc:
+                paper_content += page.get_text() + "\n\n"
+            doc.close()
+        except ImportError:
+            print("ERROR: Install PyMuPDF to read PDFs: pip install pymupdf")
+            return
+    else:
+        with open(paper_path, 'r') as f:
             paper_content = f.read()
 
-        # Extract title and abstract from markdown if not provided
-        if not args.title:
-            # Try to find title (first # heading)
-            import re
-            title_match = re.search(r'^#\s+(.+)$', paper_content, re.MULTILINE)
-            args.title = title_match.group(1) if title_match else "Untitled"
-
-        if not args.abstract:
-            # Try to find abstract
-            abstract_match = re.search(r'(?:abstract|summary)[:\s]*\n(.+?)(?=\n#|\n\n\n)', paper_content, re.IGNORECASE | re.DOTALL)
-            args.abstract = abstract_match.group(1).strip()[:1000] if abstract_match else ""
-
-        args.content = paper_content
-
+    # Extract title if not provided
     if not args.title:
-        parser.error("--title is required (or provide --paper)")
+        title_match = re.search(r'^#\s+(.+)$', paper_content, re.MULTILINE)
+        if not title_match:
+            title_match = re.search(r'^(.+?)(?:\n|$)', paper_content.strip())
+        args.title = title_match.group(1).strip() if title_match else "Untitled"
+
+    # Extract abstract if not provided
+    if not args.abstract:
+        abstract_match = re.search(
+            r'(?:^|\n)(?:abstract|summary)[:\s]*\n(.+?)(?=\n(?:#{1,2}\s|\d+\.?\s*introduction)|\n\n\n)',
+            paper_content, re.IGNORECASE | re.DOTALL
+        )
+        args.abstract = abstract_match.group(1).strip()[:1500] if abstract_match else ""
+
+    content = paper_content
 
     # Load model
     model, tokenizer = load_model(args.model)
 
     # Generate
-    print(f"\nGenerating poster for: {args.title[:50]}...")
+    print(f"\nGenerating poster for: {args.title[:60]}...")
+    print(f"Paper content: {len(content):,} chars")
     result = generate_poster(
         model,
         tokenizer,
         args.title,
         args.abstract or "",
-        args.content,
+        content,
         temperature=args.temperature,
     )
 
