@@ -1074,6 +1074,345 @@ print(result)
 
 ---
 
+## Finetuning Scripts Reference
+
+This repository includes ready-to-use scripts for the complete finetuning workflow.
+
+### Script Overview
+
+```
+├── prepare_training_data.py   # Preprocess data for finetuning
+├── train_mistral_lora.py      # Train Mistral-7B with LoRA on RunPod
+├── generate_poster.py         # Generate posters with finetuned model
+├── requirements_training.txt  # Training dependencies
+└── RUNPOD_TRAINING.md         # RunPod quick start guide
+```
+
+---
+
+### 1. Data Preprocessing (`prepare_training_data.py`)
+
+Preprocesses raw training data for LLM finetuning by truncating long papers and formatting for training frameworks.
+
+#### Features
+
+- **Smart truncation**: Extracts key sections (abstract, intro, methods, results, conclusion) to fit context windows
+- **Multiple formats**: Outputs in Alpaca, ChatML, Llama, or Mistral format
+- **LLM-based extraction**: Optional Claude Haiku for intelligent section categorization
+- **Extraction tracking**: Records whether regex or LLM was used per item
+
+#### Usage
+
+```bash
+# Basic usage (regex-based, free)
+python prepare_training_data.py \
+    --input pipeline_output/training_data.jsonl \
+    --output prepared_data/ \
+    --max-tokens 8192
+
+# With LLM section extraction (~$7 for 7k papers)
+python prepare_training_data.py \
+    --use-llm \
+    --input pipeline_output/training_data.jsonl \
+    --output prepared_data/
+
+# Mistral format for training
+python prepare_training_data.py \
+    --format mistral \
+    --max-tokens 8192 \
+    --output prepared_data/
+```
+
+#### Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--input`, `-i` | `pipeline_output/training_data.jsonl` | Input JSONL file |
+| `--output`, `-o` | `prepared_data` | Output directory |
+| `--max-tokens` | `8192` | Max context tokens |
+| `--truncation` | `smart` | Strategy: `smart`, `head`, or `none` |
+| `--format` | `alpaca` | Output format: `alpaca`, `chatml`, `llama`, `mistral` |
+| `--val-split` | `0.1` | Validation split ratio |
+| `--use-llm` | `False` | Use Claude Haiku for section extraction |
+| `--api-key` | env var | Anthropic API key (for `--use-llm`) |
+
+#### Truncation Strategies
+
+**`smart` (recommended)**: Extracts and preserves key sections:
+```
+Original paper (50k chars) → Truncated (24k chars)
+├── Abstract (2k chars max)
+├── Introduction (4k chars max)
+├── Methods (2k chars max)
+├── Results (2k chars max)
+├── Conclusion (2k chars max)
+└── Additional content (remaining space)
+```
+
+**`head`**: Simple first-N-characters truncation
+
+**`none`**: No truncation (may exceed context window)
+
+#### Section Extraction Methods
+
+**Regex (default)**: Pattern-based extraction handling multiple formats:
+- Markdown headers: `## Introduction`
+- Numbered sections: `1 Introduction`, `1. Introduction`
+- All caps: `INTRODUCTION`
+- Various section names: Introduction/Background/Overview/Motivation
+
+**LLM (`--use-llm`)**: Claude Haiku intelligently categorizes sections regardless of naming:
+- "Our Contribution" → introduction
+- "Experimental Setup" → methods
+- "Findings" → results
+
+#### Output Files
+
+```
+prepared_data/
+├── train.jsonl      # Training examples (90%)
+├── val.jsonl        # Validation examples (10%)
+└── combined.jsonl   # All examples
+```
+
+#### Output Format (Alpaca)
+
+```json
+{
+  "instruction": "Generate an academic poster for the following research paper.\n\nTitle: ...\n\nAbstract: ...",
+  "input": "## Abstract\n...\n\n## Introduction\n...",
+  "output": "{\"layout\": {...}, \"content\": \"...\"}"
+}
+```
+
+---
+
+### 2. Training Script (`train_mistral_lora.py`)
+
+Finetunes Mistral-7B with LoRA for poster generation. Optimized for RunPod A100/RTX 4090.
+
+#### Features
+
+- **4-bit quantization**: Fits in 16GB VRAM
+- **LoRA adapters**: Only trains ~0.5% of parameters
+- **Flash Attention 2**: Faster training
+- **Gradient checkpointing**: Memory efficient
+
+#### Quick Start
+
+```bash
+# On RunPod with A100 40GB
+pip install -r requirements_training.txt
+pip install flash-attn --no-build-isolation
+
+# Run training
+python train_mistral_lora.py
+```
+
+#### Configuration
+
+Edit constants at top of script:
+
+```python
+# Model
+MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
+OUTPUT_DIR = "./poster-mistral-lora"
+MAX_SEQ_LENGTH = 8192
+
+# Training
+BATCH_SIZE = 1
+GRADIENT_ACCUMULATION = 8  # Effective batch = 8
+LEARNING_RATE = 2e-4
+NUM_EPOCHS = 3
+WARMUP_RATIO = 0.1
+
+# LoRA
+LORA_R = 16
+LORA_ALPHA = 32
+LORA_DROPOUT = 0.05
+
+# Data paths
+TRAIN_FILE = "prepared_data/train.jsonl"
+VAL_FILE = "prepared_data/val.jsonl"
+```
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Mistral-7B-Instruct-v0.2 (4-bit quantized)                     │
+│                                                                 │
+│  Frozen base weights + LoRA adapters on:                        │
+│  • q_proj, k_proj, v_proj, o_proj (attention)                   │
+│  • gate_proj, up_proj, down_proj (MLP)                          │
+│                                                                 │
+│  Trainable: ~27M params (0.4% of total)                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Training Output
+
+```
+poster-mistral-lora/
+├── adapter_config.json    # LoRA configuration
+├── adapter_model.safetensors  # LoRA weights (~200MB)
+├── tokenizer.json
+├── tokenizer_config.json
+└── special_tokens_map.json
+```
+
+#### Expected Results
+
+| Metric | Value |
+|--------|-------|
+| Training time | 2-4 hours (A100 40GB) |
+| Final loss | ~0.5-0.8 |
+| Model size | ~200MB (LoRA only) |
+| Cost | ~$4-6 on RunPod |
+
+#### Troubleshooting
+
+**Out of Memory:**
+```python
+MAX_SEQ_LENGTH = 4096  # Reduce from 8192
+GRADIENT_ACCUMULATION = 4  # Reduce from 8
+```
+
+**Slow Training:**
+```bash
+# Ensure flash attention is installed
+pip install flash-attn --no-build-isolation
+```
+
+**Poor Results:**
+```python
+NUM_EPOCHS = 5  # Increase from 3
+LEARNING_RATE = 1e-4  # Decrease from 2e-4
+```
+
+---
+
+### 3. Inference Script (`generate_poster.py`)
+
+Generates posters from papers using the finetuned model.
+
+#### Features
+
+- **Accepts markdown or PDF**: Auto-extracts text from PDFs
+- **Auto-extracts metadata**: Title and abstract from paper
+- **4-bit inference**: Runs on consumer GPUs
+- **JSON output**: Structured poster layout + content
+
+#### Usage
+
+```bash
+# Generate from markdown
+python generate_poster.py --paper paper.md --output poster.json
+
+# Generate from PDF
+python generate_poster.py --paper paper.pdf --output poster.json
+
+# Custom model path
+python generate_poster.py \
+    --model ./poster-mistral-lora \
+    --paper paper.pdf \
+    --output poster.json
+
+# Adjust creativity
+python generate_poster.py \
+    --paper paper.md \
+    --temperature 0.5 \
+    --output poster.json
+```
+
+#### Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model` | `./poster-mistral-lora` | Path to finetuned LoRA model |
+| `--paper` | required | Path to paper (markdown or PDF) |
+| `--title` | auto-extracted | Paper title |
+| `--abstract` | auto-extracted | Paper abstract |
+| `--output` | stdout | Output JSON file |
+| `--temperature` | `0.7` | Generation temperature |
+
+#### Output Format
+
+```json
+{
+  "layout": {
+    "poster": {
+      "orientation": "landscape",
+      "aspect_ratio": "16:9",
+      "background": "#FFFFFF"
+    },
+    "header": {
+      "height_pct": 15,
+      "title_alignment": "center"
+    },
+    "body": {
+      "columns": 3,
+      "column_widths": ["equal"]
+    },
+    "sections": [
+      {
+        "id": 1,
+        "title": "Introduction",
+        "column": 1,
+        "content_type": "text"
+      }
+    ],
+    "color_scheme": {
+      "primary": "#0066CC",
+      "secondary": "#003366"
+    }
+  },
+  "content": "# Paper Title\n\n## Introduction\n..."
+}
+```
+
+#### PDF Support
+
+Requires PyMuPDF:
+```bash
+pip install pymupdf
+```
+
+The script automatically:
+1. Extracts text from all PDF pages
+2. Identifies title (first heading or line)
+3. Extracts abstract (if present)
+4. Passes full content to model
+
+---
+
+### Complete Workflow Example
+
+```bash
+# 1. Run the simple pipeline to create training data
+python run_simple_pipeline.py --data-dir ./data --limit 1000
+
+# 2. Preprocess for training
+python prepare_training_data.py \
+    --input pipeline_output/training_data.jsonl \
+    --output prepared_data/ \
+    --format mistral \
+    --max-tokens 8192
+
+# 3. Train on RunPod (upload files first)
+# SSH into RunPod instance
+pip install -r requirements_training.txt
+python train_mistral_lora.py
+
+# 4. Download model and generate posters locally
+python generate_poster.py \
+    --model ./poster-mistral-lora \
+    --paper my_paper.pdf \
+    --output my_poster.json
+```
+
+---
+
 ## License
 
 This pipeline is for research purposes. Check licenses for:
