@@ -159,6 +159,184 @@ pipeline/
 └── ...                      # Original pipeline files
 ```
 
+### Function-Level Pipeline Flow
+
+This diagram shows how functions connect as data flows through the pipeline:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           ENTRY POINT                                            │
+│  run_simple_pipeline.py  or  SimplePipeline(config)                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  SimplePipeline.process_dataframe(df, limit, concurrency)                       │
+│  ├── Loads train.csv with paper-poster pairs                                    │
+│  ├── Filters valid rows (has poster image + paper PDF)                          │
+│  └── For each item, calls process_single()                                      │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  SimplePipeline.process_single(paper_id, poster_path, paper_path, metadata)     │
+│                                                                                  │
+│  STEP 1: Parse Paper ─────────────────────────────────────────────────────────► │
+│  │                                                                               │
+│  │   MarkerParser.parse_paper(pdf_path, output_dir, doc_id)                     │
+│  │   ├── _check_marker() → verify marker-pdf installed                          │
+│  │   ├── _parse_with_marker(pdf_path) ──┐                                       │
+│  │   │   └── marker.convert_pdf()       │ Returns markdown string               │
+│  │   ├── OR _parse_with_pymupdf() ──────┘ (fallback)                            │
+│  │   ├── _extract_figures(pdf_path, output_dir, doc_id)                         │
+│  │   │   ├── fitz.open(pdf_path)                                                │
+│  │   │   ├── page.get_images() for each page                                    │
+│  │   │   └── Save as PNG → List[ExtractedFigure]                                │
+│  │   └── Returns: ParsedDocument(markdown_content, figures)                     │
+│  │                                                                               │
+│  STEP 2: Process Poster ──────────────────────────────────────────────────────► │
+│  │                                                                               │
+│  │   ClaudePosterProcessor.process_poster_async(image_path, paper_id)           │
+│  │   ├── _encode_image(image_path)                                              │
+│  │   │   ├── Read image bytes                                                   │
+│  │   │   ├── Check size < 5MB limit                                             │
+│  │   │   └── Resize + compress if needed → base64 string                        │
+│  │   ├── httpx.AsyncClient.post() → Claude API                                  │
+│  │   │   ├── model: "claude-3-haiku-20240307"                                   │
+│  │   │   ├── image: base64 encoded poster                                       │
+│  │   │   └── prompt: POSTER_EXTRACTION_PROMPT                                   │
+│  │   ├── _parse_response(response_text)                                         │
+│  │   │   ├── Split by "---CONTENT---" and "---LAYOUT---"                        │
+│  │   │   ├── Extract markdown content                                           │
+│  │   │   └── Parse JSON layout                                                  │
+│  │   └── Returns: (ParsedDocument, PosterLayout)                                │
+│  │                                                                               │
+│  STEP 3: Match Figures ───────────────────────────────────────────────────────► │
+│  │                                                                               │
+│  │   VLMFigureMatcher.match_figures(poster_figures, paper_figures)              │
+│  │   ├── For each poster_figure:                                                │
+│  │   │   ├── For each paper_figure:                                             │
+│  │   │   │   └── compute_feature_score(img1, img2)                              │
+│  │   │   │       ├── _compute_sift_score() → keypoint matching                  │
+│  │   │   │       ├── _compute_phash_score() → perceptual hash                   │
+│  │   │   │       └── _compute_ssim_score() → structural similarity              │
+│  │   │   ├── Filter candidates above threshold                                  │
+│  │   │   └── Select best match                                                  │
+│  │   └── Returns: List[FigureMatch]                                             │
+│  │                                                                               │
+│  STEP 4: Create Training Example ─────────────────────────────────────────────► │
+│  │                                                                               │
+│  │   _create_training_example(paper_id, parsed_paper, parsed_poster, ...)       │
+│  │   └── Returns: TrainingExample                                               │
+│  │                                                                               │
+│  └── Returns: PipelineResult(success, parsed_paper, parsed_poster, ...)         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  SimplePipeline.export_training_data(output_path)                               │
+│  ├── Load all TrainingExample JSON files                                        │
+│  ├── Format for finetuning:                                                     │
+│  │   {                                                                          │
+│  │     "instruction": "Generate poster for...",                                 │
+│  │     "input": paper_markdown,                                                 │
+│  │     "output": {"layout": {...}, "content": poster_markdown}                  │
+│  │   }                                                                          │
+│  └── Write to training_data.jsonl                                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow Between Components
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   train.csv  │     │  paper.pdf   │     │  poster.png  │     │   Output     │
+│              │     │              │     │              │     │              │
+│  paper_id    │     │  (research   │     │  (academic   │     │  training_   │
+│  pdf_path    │────▶│   paper)     │     │   poster)    │────▶│  data.jsonl  │
+│  image_path  │     │              │     │              │     │              │
+│  metadata    │     └──────┬───────┘     └──────┬───────┘     └──────────────┘
+└──────────────┘            │                    │                    ▲
+                            ▼                    ▼                    │
+                   ┌─────────────────┐  ┌─────────────────┐          │
+                   │  MarkerParser   │  │ ClaudePoster-   │          │
+                   │                 │  │ Processor       │          │
+                   │ parse_paper()   │  │                 │          │
+                   └────────┬────────┘  │ process_poster()│          │
+                            │           └────────┬────────┘          │
+                            ▼                    ▼                    │
+                   ┌─────────────────┐  ┌─────────────────┐          │
+                   │ ParsedDocument  │  │ ParsedDocument  │          │
+                   │                 │  │ + PosterLayout  │          │
+                   │ • markdown      │  │                 │          │
+                   │ • figures[]     │  │ • markdown      │          │
+                   └────────┬────────┘  │ • layout JSON   │          │
+                            │           │ • figures[]     │          │
+                            │           └────────┬────────┘          │
+                            │                    │                    │
+                            └─────────┬──────────┘                    │
+                                      │                               │
+                                      ▼                               │
+                            ┌─────────────────┐                       │
+                            │ VLMFigureMatcher│                       │
+                            │                 │                       │
+                            │ match_figures() │                       │
+                            └────────┬────────┘                       │
+                                     │                                │
+                                     ▼                                │
+                            ┌─────────────────┐                       │
+                            │ List[FigureMatch│                       │
+                            │                 │                       │
+                            │ • poster_fig_id │                       │
+                            │ • paper_fig_id  │                       │
+                            │ • score         │                       │
+                            └────────┬────────┘                       │
+                                     │                                │
+                                     ▼                                │
+                            ┌─────────────────┐                       │
+                            │ TrainingExample │───────────────────────┘
+                            │                 │
+                            │ • paper_markdown│
+                            │ • poster_markdown
+                            │ • poster_layout │
+                            │ • figure_matches│
+                            └─────────────────┘
+```
+
+### Async Processing Flow
+
+The pipeline uses async/await for concurrent API calls:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  process_batch_async(items, concurrency=50)                                     │
+│                                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │  asyncio.Semaphore(concurrency=50)                                      │    │
+│  │                                                                          │    │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐       ┌─────────┐                  │    │
+│  │  │ Task 1  │ │ Task 2  │ │ Task 3  │  ...  │ Task 50 │  ← Max parallel  │    │
+│  │  │         │ │         │ │         │       │         │                  │    │
+│  │  │ Claude  │ │ Claude  │ │ Claude  │       │ Claude  │                  │    │
+│  │  │  API    │ │  API    │ │  API    │       │  API    │                  │    │
+│  │  └────┬────┘ └────┬────┘ └────┬────┘       └────┬────┘                  │    │
+│  │       │           │           │                 │                        │    │
+│  │       └───────────┴───────────┴─────────────────┘                        │    │
+│  │                           │                                              │    │
+│  │                           ▼                                              │    │
+│  │               asyncio.gather(*tasks)                                     │    │
+│  │                           │                                              │    │
+│  │                           ▼                                              │    │
+│  │                   List[Results]                                          │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                  │
+│  Rate limiting handled by:                                                       │
+│  • Exponential backoff on 429 errors                                            │
+│  • Retry-After header respect                                                   │
+│  • Max 5 retries per request                                                    │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 1. Configuration (`config.py`)
 
 Defines settings for each component:
