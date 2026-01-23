@@ -34,8 +34,8 @@ OUTPUT_DIR = "./poster-mistral-lora"
 MAX_SEQ_LENGTH = 4096
 
 # Training hyperparameters
-BATCH_SIZE = 1
-GRADIENT_ACCUMULATION = 8  # Effective batch size = 8
+BATCH_SIZE = 4
+GRADIENT_ACCUMULATION = 2  # Effective batch size = 8
 LEARNING_RATE = 2e-4
 NUM_EPOCHS = 3
 WARMUP_RATIO = 0.1
