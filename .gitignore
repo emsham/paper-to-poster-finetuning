@@ -9,6 +9,8 @@ simple_pipeline_output/
 test_output/
 test_*_output/
 hf_model/
+output_gpu*/
+Dolphin/
 
 # Archive (old exploration files)
 archive/
