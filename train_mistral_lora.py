@@ -23,7 +23,7 @@ from transformers import (
     TrainingArguments,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig
 
 # ============================================================================
 # CONFIGURATION
@@ -31,7 +31,7 @@ from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
 
 MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
 OUTPUT_DIR = "./poster-mistral-lora"
-MAX_SEQ_LENGTH = 8192
+MAX_SEQ_LENGTH = 4096
 
 # Training hyperparameters
 BATCH_SIZE = 1
@@ -163,8 +163,8 @@ def main():
         save_total_limit=3,
         bf16=True,
         optim="paged_adamw_8bit",
-        max_seq_length=MAX_SEQ_LENGTH,
         dataset_text_field="text",
+        max_length=MAX_SEQ_LENGTH,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to="none",  # Set to "wandb" if you want logging
@@ -180,7 +180,7 @@ def main():
         args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     # Train
