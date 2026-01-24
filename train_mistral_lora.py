@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Finetune Mistral-7B with LoRA for Poster Generation
-====================================================
+Finetune Mistral-7B with LoRA for Poster Generation (Multi-GPU)
+================================================================
 
 RunPod Usage:
-    1. Launch a pod with A100 40GB or RTX 4090
+    1. Launch a pod with 2x RTX 4090 or similar
     2. Upload prepared_data/train.jsonl and prepared_data/val.jsonl
     3. Run: pip install -r requirements_training.txt
-    4. Run: python train_mistral_lora.py
+    4. Run: accelerate launch --multi_gpu --num_processes=2 train_mistral_lora.py
 
-Estimated time: 2-4 hours on A100 40GB
-Estimated cost: ~$4-6 on RunPod
+For single GPU: python train_mistral_lora.py
 """
 
 import os
@@ -19,10 +18,8 @@ from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
-    TrainingArguments,
 )
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
 from trl import SFTTrainer, SFTConfig
 
 # ============================================================================
@@ -34,8 +31,8 @@ OUTPUT_DIR = "./poster-mistral-lora"
 MAX_SEQ_LENGTH = 4096
 
 # Training hyperparameters
-BATCH_SIZE = 4
-GRADIENT_ACCUMULATION = 2  # Effective batch size = 8
+BATCH_SIZE = 2
+GRADIENT_ACCUMULATION = 4  # Effective batch size = 8 per GPU, 16 total with 2 GPUs
 LEARNING_RATE = 2e-4
 NUM_EPOCHS = 3
 WARMUP_RATIO = 0.1
@@ -63,7 +60,7 @@ def format_prompt(example):
 
 def main():
     print("=" * 60)
-    print("POSTER GENERATION FINETUNING")
+    print("POSTER GENERATION FINETUNING (Multi-GPU)")
     print("=" * 60)
     print(f"Model: {MODEL_NAME}")
     print(f"Output: {OUTPUT_DIR}")
@@ -72,8 +69,9 @@ def main():
 
     # Check GPU
     if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        print(f"GPUs available: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({torch.cuda.get_device_properties(i).total_memory / 1e9:.1f} GB)")
     else:
         print("WARNING: No GPU detected! Training will be very slow.")
 
@@ -94,23 +92,15 @@ def main():
     dataset = dataset.map(format_prompt, remove_columns=dataset["train"].column_names)
 
     # ========================================================================
-    # Load Model with 4-bit Quantization
+    # Load Model (bf16, no quantization for multi-GPU compatibility)
     # ========================================================================
-    print("\nLoading model with 4-bit quantization...")
-
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
+    print("\nLoading model in bf16...")
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        quantization_config=bnb_config,
-        device_map="auto",
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
-        attn_implementation="flash_attention_2",  # Faster attention
+        attn_implementation="flash_attention_2",
     )
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -134,7 +124,6 @@ def main():
         task_type="CAUSAL_LM",
     )
 
-    model = prepare_model_for_kbit_training(model)
     model = get_peft_model(model, lora_config)
 
     # Print trainable parameters
@@ -162,12 +151,13 @@ def main():
         eval_steps=200,
         save_total_limit=3,
         bf16=True,
-        optim="paged_adamw_8bit",
+        optim="adamw_torch",
         dataset_text_field="text",
         max_length=MAX_SEQ_LENGTH,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
-        report_to="none",  # Set to "wandb" if you want logging
+        report_to="none",
+        ddp_find_unused_parameters=False,
     )
 
     # ========================================================================
