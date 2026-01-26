@@ -57,30 +57,60 @@ except ImportError:
 # CONFIGURATION
 # ============================================================================
 
-SYSTEM_PROMPT = """You are an expert at creating academic posters. Given a research paper's content,
-generate a well-structured academic poster with clear sections, key findings, and visual layout descriptions."""
+# System prompt for API models to generate JSON layout like the finetuned model
+SYSTEM_PROMPT = """You are an expert at creating academic poster layouts from research papers.
+You output JSON describing the poster layout structure, including sections, columns, figures, and styling.
+Your output must be valid JSON with a "layout" object containing poster structure and a "content" field with the text."""
 
-GENERATION_PROMPT = """Generate an academic poster based on the following paper content.
-Include: Title, Authors, Introduction/Background, Methods, Key Results, Conclusions, and suggest figure placements.
+# Example layout structure for API models to follow
+LAYOUT_EXAMPLE = '''{
+  "layout": {
+    "poster": {"orientation": "landscape", "aspect_ratio": "16:9", "background": "#ffffff"},
+    "header": {"height_pct": 15, "background": "linear-gradient(to right, #0077b6, #00a8e1)"},
+    "body": {"columns": 3, "column_widths": ["33%", "34%", "33%"], "gutter_pct": 5},
+    "sections": [
+      {"id": 1, "title": "SECTION TITLE", "column": 1, "height_pct": 30, "content_type": "text/bullets", "has_figures": false},
+      ...
+    ],
+    "figures": [{"id": 1, "section_id": 2, "type": "chart", "caption_visible": true}],
+    "color_scheme": {"primary": "#0077b6", "secondary": "#00a8e1", "text": "#333333"}
+  },
+  "content": "# Title\\n\\n## Section 1\\nBullet points and text content..."
+}'''
+
+GENERATION_PROMPT = """Generate an academic poster layout as JSON for the following research paper.
+
+Title: {title}
+
+Abstract: {abstract}
+
+Output a JSON object with:
+1. "layout" - poster structure (orientation, columns, sections with positions/sizes, figures, colors)
+2. "content" - the actual text content for the poster sections
+
+Example structure:
+""" + LAYOUT_EXAMPLE + """
 
 Paper Content:
-{paper_content}"""
+{paper_content}
 
-JUDGE_PROMPT = """You are evaluating academic poster generations from three different AI models.
-Rate each poster on a scale of 1-10 for the following criteria:
+Output valid JSON only:"""
 
-1. **Structure** (1-10): Does it have clear sections (Title, Intro, Methods, Results, Conclusions)?
-2. **Content Quality** (1-10): Is the information accurate, relevant, and well-summarized?
-3. **Visual Layout** (1-10): Does it describe figure placements and visual organization?
-4. **Readability** (1-10): Is it concise and suitable for a poster format?
-5. **Academic Tone** (1-10): Does it maintain professional academic language?
+# Judge prompt for evaluating JSON layouts
+JUDGE_PROMPT = """You are evaluating academic poster LAYOUT generations from three AI models.
+Each model outputs JSON describing poster structure and content.
 
-For each model output, provide scores and brief justification.
-Then declare a winner.
+Rate each layout on a scale of 1-10 for:
+
+1. **JSON Validity** (1-10): Is it valid, parseable JSON?
+2. **Layout Structure** (1-10): Does it define clear sections, columns, positioning?
+3. **Visual Design** (1-10): Are colors, spacing, and proportions well-defined?
+4. **Section Organization** (1-10): Are sections logically organized (intro, methods, results, etc.)?
+5. **Content Quality** (1-10): Is the "content" field well-written for a poster?
 
 ---
-PAPER CONTENT:
-{paper_content}
+PAPER TITLE: {title}
+PAPER ABSTRACT: {abstract}
 
 ---
 MODEL A (Finetuned Mistral):
@@ -97,9 +127,9 @@ MODEL C (Claude):
 ---
 Provide your evaluation as JSON:
 {{
-    "model_a": {{"structure": X, "content": X, "layout": X, "readability": X, "tone": X, "total": X, "notes": "..."}},
-    "model_b": {{"structure": X, "content": X, "layout": X, "readability": X, "tone": X, "total": X, "notes": "..."}},
-    "model_c": {{"structure": X, "content": X, "layout": X, "readability": X, "tone": X, "total": X, "notes": "..."}},
+    "model_a": {{"json_valid": X, "layout": X, "design": X, "sections": X, "content": X, "total": X, "notes": "..."}},
+    "model_b": {{"json_valid": X, "layout": X, "design": X, "sections": X, "content": X, "total": X, "notes": "..."}},
+    "model_c": {{"json_valid": X, "layout": X, "design": X, "sections": X, "content": X, "total": X, "notes": "..."}},
     "winner": "model_a|model_b|model_c",
     "reasoning": "..."
 }}"""
@@ -291,6 +321,45 @@ def load_pdfs_from_directory(pdf_dir: str, parser) -> list:
 # MODEL RUNNERS
 # ============================================================================
 
+def extract_title_abstract(content: str) -> tuple:
+    """Extract title and abstract from paper content."""
+    lines = content.split('\n')
+    title = ""
+    abstract = ""
+
+    # Try to find title (usually first non-empty line or after # )
+    for line in lines[:20]:
+        line = line.strip()
+        if line and not line.lower().startswith('abstract'):
+            if line.startswith('#'):
+                title = line.lstrip('#').strip()
+            elif not title:
+                title = line
+            break
+
+    # Try to find abstract
+    in_abstract = False
+    abstract_lines = []
+    for line in lines:
+        lower = line.lower().strip()
+        if 'abstract' in lower and len(lower) < 50:
+            in_abstract = True
+            continue
+        if in_abstract:
+            if line.strip().startswith('#') or lower.startswith('introduction') or lower.startswith('1 ') or lower.startswith('1.'):
+                break
+            abstract_lines.append(line)
+
+    abstract = ' '.join(abstract_lines).strip()[:1000]  # Limit abstract length
+
+    if not title:
+        title = "Research Paper"
+    if not abstract:
+        abstract = content[:500]  # Fallback to first 500 chars
+
+    return title, abstract
+
+
 class FinetunedModel:
     """Run inference with the finetuned Mistral LoRA model."""
 
@@ -308,8 +377,14 @@ class FinetunedModel:
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         print("Finetuned model loaded.")
 
-    def generate(self, paper_content: str) -> str:
-        instruction = "Generate an academic poster based on the following paper content."
+    def generate(self, paper_content: str, title: str = "", abstract: str = "") -> str:
+        # Match training format: instruction includes title and abstract
+        instruction = f"""Generate an academic poster for the following research paper.
+
+Title: {title}
+
+Abstract: {abstract}"""
+
         prompt = f"<s>[INST] {instruction}\n\n{paper_content} [/INST]"
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
@@ -334,14 +409,16 @@ class GPTModel:
         self.model = model
         print(f"GPT model ready: {model}")
 
-    def generate(self, paper_content: str) -> str:
+    def generate(self, paper_content: str, title: str = "", abstract: str = "") -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": GENERATION_PROMPT.format(paper_content=paper_content)}
+                {"role": "user", "content": GENERATION_PROMPT.format(
+                    title=title, abstract=abstract, paper_content=paper_content
+                )}
             ],
-            max_tokens=2048,
+            max_tokens=4096,
             temperature=0.7
         )
         return response.choices[0].message.content
@@ -357,13 +434,15 @@ class ClaudeModel:
         self.model = model
         print(f"Claude model ready: {model}")
 
-    def generate(self, paper_content: str) -> str:
+    def generate(self, paper_content: str, title: str = "", abstract: str = "") -> str:
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=2048,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
             messages=[
-                {"role": "user", "content": GENERATION_PROMPT.format(paper_content=paper_content)}
+                {"role": "user", "content": GENERATION_PROMPT.format(
+                    title=title, abstract=abstract, paper_content=paper_content
+                )}
             ]
         )
         return response.content[0].text
@@ -377,9 +456,10 @@ class ClaudeJudge:
             raise ImportError("anthropic required. pip install anthropic")
         self.client = Anthropic()
 
-    def evaluate(self, paper_content: str, output_a: str, output_b: str, output_c: str) -> dict:
+    def evaluate(self, title: str, abstract: str, output_a: str, output_b: str, output_c: str) -> dict:
         prompt = JUDGE_PROMPT.format(
-            paper_content=paper_content,
+            title=title,
+            abstract=abstract,
             output_a=output_a,
             output_b=output_b,
             output_c=output_c
@@ -472,12 +552,30 @@ def run_evaluation(args):
     # Run evaluation
     results = []
 
+    # Max characters for paper content
+    # NOTE: The finetuned model was trained with MAX_SEQ_LENGTH=4096 tokens
+    # 4000 chars ≈ 2000 tokens for input, leaving ~2000 tokens for JSON output
+    MAX_PAPER_CHARS = 4000
+
     for i, sample in enumerate(samples):
         print(f"\n{'='*60}")
         print(f"Sample {i+1}/{len(samples)}: {sample.get('title', sample['id'])[:50]}...")
         print("="*60)
 
         paper_content = sample.get("content", sample.get("input", ""))
+
+        # Truncate if too long
+        if len(paper_content) > MAX_PAPER_CHARS:
+            print(f"  Truncating paper from {len(paper_content):,} to {MAX_PAPER_CHARS:,} chars")
+            paper_content = paper_content[:MAX_PAPER_CHARS] + "\n\n[... content truncated for length ...]"
+
+        print(f"  Paper content: {len(paper_content):,} chars")
+
+        # Extract title and abstract for prompts
+        title, abstract = extract_title_abstract(paper_content)
+        print(f"  Title: {title[:60]}...")
+        print(f"  Abstract: {abstract[:100]}...")
+
         outputs = {}
 
         # Generate from each model
@@ -488,11 +586,14 @@ def run_evaluation(args):
 
             print(f"  Generating with {name}...")
             try:
-                outputs[name] = model.generate(paper_content)
+                outputs[name] = model.generate(paper_content, title=title, abstract=abstract)
                 print(f"    Done ({len(outputs[name])} chars)")
             except Exception as e:
-                print(f"    Error: {e}")
-                outputs[name] = f"[Error: {e}]"
+                import traceback
+                error_msg = str(e)
+                print(f"    Error: {error_msg}")
+                print(f"    Traceback: {traceback.format_exc()}")
+                outputs[name] = f"[Error: {error_msg}]"
 
         # Save individual outputs
         sample_dir = output_dir / f"sample_{i+1}"
@@ -511,10 +612,11 @@ def run_evaluation(args):
             print("  Evaluating outputs with Claude judge...")
             try:
                 evaluation = judge.evaluate(
-                    paper_content,
-                    outputs.get("finetuned", "N/A"),
-                    outputs.get("gpt", "N/A"),
-                    outputs.get("claude", "N/A")
+                    title=title,
+                    abstract=abstract,
+                    output_a=outputs.get("finetuned", "N/A"),
+                    output_b=outputs.get("gpt", "N/A"),
+                    output_c=outputs.get("claude", "N/A")
                 )
                 with open(sample_dir / "evaluation.json", "w") as f:
                     json.dump(evaluation, f, indent=2)
